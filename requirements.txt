@@ -1,0 +1,18 @@
+# Core dependencies for fire door detection system
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=9.0.0
+pdf2image>=1.16.0
+numpy>=1.21.0
+
+# OpenAI API for fire rating analysis
+openai>=1.0.0
+
+# FastAPI dependencies (for future API implementation)
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+python-multipart>=0.0.6
+
+# Environment and configuration
+python-dotenv>=1.0.0

@@ -102,7 +102,7 @@ def load_images_from_file(file_path, dpi=600):
             return []
 
 
-def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confidence=0.25, 
+def detect_and_save_doors(image_path, output_folder, model_path='models/door_detection_model.pt', confidence=0.1, 
                          padding=20, min_size=None, dpi=600, save_converted=False,
                          enhance=True):
     """
@@ -111,7 +111,7 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
     Args:
         image_path (str): Path to the input floor plan image or PDF
         output_folder (str): Path to the folder where cropped door images will be saved
-        model_path (str): Path to the YOLOv8 model file (default: 'best.pt')
+        model_path (str): Path to the YOLOv8 model file (default: 'models/door_detection_model.pt')
         confidence (float): Confidence threshold for detection (default: 0.25)
         padding (int): Pixels to add around each detection for context (default: 20)
         min_size (int): Minimum size to resize images to (default: None, no resizing)
@@ -120,7 +120,10 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
         enhance (bool): Apply image enhancement for better detection (default: True, recommended for PDFs)
     
     Returns:
-        int: Number of doors detected and saved
+        dict: Dictionary containing:
+            - door_count (int): Number of doors detected and saved
+            - door_images (list): List of paths to saved door images
+            - output_folder (str): Path to the output folder
     """
     # Create output folder if it doesn't exist
     os.makedirs(output_folder, exist_ok=True)
@@ -130,7 +133,11 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
     
     if not images:
         print("Failed to load any images from the file.")
-        return 0
+        return {
+            "door_count": 0,
+            "door_images": [],
+            "output_folder": output_folder
+        }
     
     # Fix PyTorch 2.6+ loading issue by temporarily disabling weights_only
     # This is safe since we trust the model file from ultralytics
@@ -149,12 +156,17 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
     except Exception as e:
         print(f"Error loading model: {e}")
         torch.load = original_load
-        return 0
+        return {
+            "door_count": 0,
+            "door_images": [],
+            "output_folder": output_folder
+        }
     
     torch.load = original_load  # Restore original torch.load
     
     # Process each page/image
     total_door_count = 0
+    door_images = []  # List to track saved door image paths
     is_pdf = Path(image_path).suffix.lower() == '.pdf'
     
     for page_num, image in images:
@@ -236,6 +248,9 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
                     # Save the cropped image with high quality
                     cropped_image.save(output_path, quality=95, optimize=False)
                     
+                    # Add the saved image path to our list
+                    door_images.append(output_path)
+                    
                     page_door_count += 1
                     total_door_count += 1
                     print(f"Saved door {page_door_count}: {filename} (confidence: {conf_score:.2f})")
@@ -245,7 +260,12 @@ def detect_and_save_doors(image_path, output_folder, model_path='best.pt', confi
     print(f"\n{'='*50}")
     print(f"Total doors detected and saved: {total_door_count}")
     print(f"{'='*50}")
-    return total_door_count
+    
+    return {
+        "door_count": total_door_count,
+        "door_images": door_images,
+        "output_folder": output_folder
+    }
 
 
 def main():
@@ -268,8 +288,8 @@ def main():
     parser.add_argument(
         '--model',
         type=str,
-        default='best.pt',
-        help='Path to the YOLOv8 model file (default: best.pt)'
+        default='models/door_detection_model.pt',
+        help='Path to the YOLOv8 model file (default: models/door_detection_model.pt)'
     )
     parser.add_argument(
         '--confidence',
@@ -309,7 +329,7 @@ def main():
     args = parser.parse_args()
     
     # Run detection
-    detect_and_save_doors(
+    result = detect_and_save_doors(
         image_path=args.image_path,
         output_folder=args.output_folder,
         model_path=args.model,
@@ -320,6 +340,12 @@ def main():
         save_converted=args.save_converted,
         enhance=not args.no_enhance  # Enhancement is ON by default
     )
+    
+    # Print structured result for command line usage
+    print(f"\nDetection Results:")
+    print(f"  Doors found: {result['door_count']}")
+    print(f"  Output folder: {result['output_folder']}")
+    print(f"  Door images saved: {len(result['door_images'])}")
 
 
 if __name__ == "__main__":
