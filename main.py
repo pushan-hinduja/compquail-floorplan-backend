@@ -23,7 +23,9 @@ except ImportError:
 def process_floorplan_complete(pdf_path: str, output_folder: str, api_key: str, 
                               confidence: float = 0.25, padding: int = 20, 
                               min_size: Optional[int] = None, dpi: int = 600, 
-                              enhance: bool = True, model: str = "gpt-4o") -> Dict:
+                              enhance: bool = True, model: str = "gpt-4o", 
+                              save_debug_images: bool = False, debug_api: bool = False, 
+                              debug_doors: bool = False, use_adaptive_grid: bool = True) -> Dict:
     """
     Complete workflow: detect doors in PDF, analyze fire ratings, handle human review.
     
@@ -69,7 +71,10 @@ def process_floorplan_complete(pdf_path: str, output_folder: str, api_key: str,
         padding=padding,
         min_size=min_size,
         dpi=dpi,
-        enhance=enhance
+        enhance=enhance,
+        save_debug_images=save_debug_images,
+        debug=debug_doors,
+        use_adaptive_grid=use_adaptive_grid
     )
     
     if door_result["door_count"] == 0:
@@ -90,7 +95,8 @@ def process_floorplan_complete(pdf_path: str, output_folder: str, api_key: str,
     fire_rating_results = process_door_folder(
         folder_path=door_result["output_folder"],
         api_key=api_key,
-        model=model
+        model=model,
+        debug=debug_api
     )
     
     if not fire_rating_results:
@@ -174,21 +180,27 @@ def handle_human_review(aggregated_results: Dict, fire_rating_results: List[Dict
         # In a real implementation, you might display the image here
         # For CLI testing, we'll prompt for manual input
         while True:
-            rating = input(f"   Enter fire rating (FD30/FD60/FD90/FD120/UNKNOWN) or 'skip': ").strip().upper()
+            rating = input(f"   Enter fire rating (FD30/FD60/FD90/FD120/NO_RATING/UNKNOWN) or 'skip': ").strip().upper()
             
-            if rating in ['FD30', 'FD60', 'FD90', 'FD120', 'UNKNOWN', 'SKIP']:
+            if rating in ['FD30', 'FD60', 'FD90', 'FD120', 'NO_RATING', 'UNKNOWN', 'SKIP']:
                 if rating != 'SKIP':
                     manual_ratings[item['image_name']] = rating
+                else:
+                    manual_ratings[item['image_name']] = None  # Mark as skipped
                 break
             else:
-                print("   Invalid input. Please enter FD30, FD60, FD90, FD120, UNKNOWN, or skip.")
+                print("   Invalid input. Please enter FD30, FD60, FD90, FD120, NO_RATING, UNKNOWN, or skip.")
     
     # Update aggregated results with manual ratings
     updated_ratings = aggregated_results["ratings"].copy()
     
     for image_name, rating in manual_ratings.items():
-        if rating != 'UNKNOWN':
-            updated_ratings[rating] = updated_ratings.get(rating, 0) + 1
+        if rating is not None and rating != 'UNKNOWN':
+            # Handle "NO_RATING" as a special case
+            if rating == 'NO_RATING':
+                updated_ratings["NO_RATING"] = updated_ratings.get("NO_RATING", 0) + 1
+            else:
+                updated_ratings[rating] = updated_ratings.get(rating, 0) + 1
     
     # Remove items that were manually reviewed
     remaining_review = [
@@ -202,7 +214,13 @@ def handle_human_review(aggregated_results: Dict, fire_rating_results: List[Dict
         "needs_review": remaining_review,
         "review_count": len(remaining_review),
         "confidence_breakdown": aggregated_results["confidence_breakdown"],
-        "manual_reviews": manual_ratings
+        "manual_reviews": manual_ratings,
+        "human_feedback": {
+            "total_reviewed": len(manual_ratings),
+            "skipped": len([r for r in manual_ratings.values() if r is None]),
+            "rated": len([r for r in manual_ratings.values() if r is not None]),
+            "no_rating_count": len([r for r in manual_ratings.values() if r == "NO_RATING"])
+        }
     }
 
 
@@ -295,6 +313,38 @@ def main():
         action='store_true',
         help='Disable image enhancement'
     )
+    parser.add_argument(
+        '--debug-pdf',
+        action='store_true',
+        help='Save debug images from PDF conversion for troubleshooting'
+    )
+    parser.add_argument(
+        '--pdf-dpi',
+        type=int,
+        default=600,
+        help='DPI for PDF conversion (default: 600, higher = better quality but slower)'
+    )
+    parser.add_argument(
+        '--debug-api',
+        action='store_true',
+        help='Enable debug output for OpenAI API responses'
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug output for YOLO door detection (shows all detections with coordinates)'
+    )
+    parser.add_argument(
+        '--no-adaptive-grid',
+        action='store_true',
+        help='Disable adaptive grid processing for PDFs (use standard processing)'
+    )
+    parser.add_argument(
+        '--grid-size',
+        type=str,
+        default='auto',
+        help='Grid size for adaptive processing (e.g., 4x4, 6x6, auto)'
+    )
     
     args = parser.parse_args()
     
@@ -317,9 +367,13 @@ def main():
             api_key=args.api_key,
             confidence=args.confidence,
             padding=args.padding,
-            dpi=args.dpi,
+            dpi=args.pdf_dpi,  # Use PDF-specific DPI
             enhance=not args.no_enhance,
-            model=args.model
+            model=args.model,
+            save_debug_images=args.debug_pdf,
+            debug_api=args.debug_api,
+            debug_doors=args.debug,
+            use_adaptive_grid=not args.no_adaptive_grid
         )
         
         if result["success"]:

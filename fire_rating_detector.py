@@ -30,7 +30,7 @@ def encode_image_to_base64(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 
-def analyze_door_image(image_path: str, api_key: str, model: str = "gpt-5-nano") -> Dict:
+def analyze_door_image(image_path: str, api_key: str, model: str = "gpt-4o", debug: bool = False) -> Dict:
     """
     Analyze a single door image to extract fire rating information using OpenAI Vision API.
     
@@ -75,17 +75,29 @@ Fire door ratings are typically indicated by a number in a red circle like:
 - 60 (60-minute fire door) 
 - 90 (90-minute fire door)
 - 180 (120-minute fire door)
+NOTE: there can be other numbers - the above are just a few examples of some of the comon ratings. 
 
 Other formats might include:
-- "FD30", "FD60", "FD90", "FD120"
+- "FD30", "FD60", "FD90", "FD120", etc. 
+
+IMPORTANT: Some doors may have NO fire rating at all. This is normal for:
+- Regular doors (not fire doors)
+- Interior doors
+- Non-fire-rated doors
+These doors will look like a regular door with no red circle containing a number. 
 
 Please analyze this door image and respond with a JSON object containing:
-1. "rating": The fire door rating if clearly visible (e.g., "30", "60", "90", "180"), or null if not found
-2. "needs_review": true if you cannot confidently determine the rating or if the image is unclear, false otherwise
+1. "rating": The fire door rating if clearly visible (e.g., "30", "60", "90", "180"), or "NO_RATING"" if you are confident this door has no fire rating
+2. "needs_review": true if you cannot confidently determine whether there is a rating or not, false otherwise
 3. "reason": Brief explanation of what you found or why review is needed
 4. "confidence": "high" if very confident, "medium" if somewhat confident, "low" if uncertain
 
 Important: Only return ratings you can confidently identify. If the rating is not clearly visible, illegible, or ambiguous, set needs_review to true and rating to null.
+Guidelines:
+- If you can clearly see a fire rating label, return that rating with high confidence
+- If you can clearly see this is a regular door with no fire rating, return "NO_RATING" with high confidence (NOTE this will look like a regular door with no red circle containing a fire rating)
+- If the image is unclear, illegible, or you cannot determine if there's a rating, set needs_review to true and rating to null
+- If the door appears to be a double door with 2 ratings, return the rating for both doors separately (e.g. if there's one image of a double door with 2 ratings, you should return 2 doors with the corresponding rating for each door)
 
 Return ONLY the JSON object, no other text."""
 
@@ -114,7 +126,67 @@ Return ONLY the JSON object, no other text."""
         )
         
         # Extract and parse response
-        response_text = response.choices[0].message.content.strip()
+        try:
+            if debug:
+                # Debug: Print response structure
+                print(f"    Debug: Response type: {type(response)}")
+                print(f"    Debug: Choices type: {type(response.choices)}")
+                print(f"    Debug: Choices length: {len(response.choices) if hasattr(response, 'choices') else 'No choices attr'}")
+            
+            if not response.choices:
+                return {
+                    "image_path": image_path,
+                    "image_name": os.path.basename(image_path),
+                    "rating": None,
+                    "needs_review": True,
+                    "reason": "No choices in API response",
+                    "confidence": "none"
+                }
+            
+            choice = response.choices[0]
+            if debug:
+                print(f"    Debug: Choice type: {type(choice)}")
+                print(f"    Debug: Choice attributes: {dir(choice)}")
+            
+            if not hasattr(choice, 'message'):
+                return {
+                    "image_path": image_path,
+                    "image_name": os.path.basename(image_path),
+                    "rating": None,
+                    "needs_review": True,
+                    "reason": "No message in API response choice",
+                    "confidence": "none"
+                }
+            
+            message = choice.message
+            if debug:
+                print(f"    Debug: Message type: {type(message)}")
+                print(f"    Debug: Message attributes: {dir(message)}")
+            
+            if not hasattr(message, 'content'):
+                return {
+                    "image_path": image_path,
+                    "image_name": os.path.basename(image_path),
+                    "rating": None,
+                    "needs_review": True,
+                    "reason": "No content in API response message",
+                    "confidence": "none"
+                }
+            
+            response_text = message.content.strip()
+            if debug:
+                print(f"    Debug: Response text length: {len(response_text)}")
+                print(f"    Debug: Response text preview: {response_text[:100]}...")
+            
+        except (AttributeError, IndexError, KeyError) as e:
+            return {
+                "image_path": image_path,
+                "image_name": os.path.basename(image_path),
+                "rating": None,
+                "needs_review": True,
+                "reason": f"Error extracting response from API: {str(e)}",
+                "confidence": "none"
+            }
         
         # Try to parse as JSON
         try:
@@ -125,23 +197,54 @@ Return ONLY the JSON object, no other text."""
                     response_text = response_text[4:]
                 response_text = response_text.strip()
             
-            result = json.loads(response_text)
+            parsed_response = json.loads(response_text)
             
-            # Add image metadata
-            result["image_path"] = image_path
-            result["image_name"] = os.path.basename(image_path)
-            
-            # Validate required fields
-            if "rating" not in result:
-                result["rating"] = None
-            if "needs_review" not in result:
-                result["needs_review"] = True
-            if "reason" not in result:
-                result["reason"] = "Response missing required fields"
-            if "confidence" not in result:
-                result["confidence"] = "low"
-            
-            return result
+            # Handle both single objects and arrays of objects
+            if isinstance(parsed_response, list):
+                # Multiple doors detected - return array of results
+                results = []
+                for i, door_result in enumerate(parsed_response):
+                    # Add image metadata with door index
+                    door_result["image_path"] = image_path
+                    door_result["image_name"] = os.path.basename(image_path)
+                    door_result["door_index"] = i + 1  # 1-based indexing
+                    
+                    # Validate required fields
+                    if "rating" not in door_result:
+                        door_result["rating"] = None
+                    if "needs_review" not in door_result:
+                        door_result["needs_review"] = True
+                    if "reason" not in door_result:
+                        door_result["reason"] = "Response missing required fields"
+                    if "confidence" not in door_result:
+                        door_result["confidence"] = "low"
+                    
+                    results.append(door_result)
+                
+                if debug:
+                    print(f"    Debug: Found {len(results)} doors in single image")
+                
+                return results  # Return array of results
+            else:
+                # Single door - return single result
+                result = parsed_response
+                
+                # Add image metadata
+                result["image_path"] = image_path
+                result["image_name"] = os.path.basename(image_path)
+                result["door_index"] = 1  # Single door
+                
+                # Validate required fields
+                if "rating" not in result:
+                    result["rating"] = None
+                if "needs_review" not in result:
+                    result["needs_review"] = True
+                if "reason" not in result:
+                    result["reason"] = "Response missing required fields"
+                if "confidence" not in result:
+                    result["confidence"] = "low"
+                
+                return result
             
         except json.JSONDecodeError:
             # If JSON parsing fails, flag for review
@@ -166,7 +269,7 @@ Return ONLY the JSON object, no other text."""
         }
 
 
-def process_door_folder(folder_path: str, api_key: str, model: str = "gpt-4o") -> List[Dict]:
+def process_door_folder(folder_path: str, api_key: str, model: str = "gpt-4o", debug: bool = False) -> List[Dict]:
     """
     Process all door images in a folder to extract fire ratings.
     
@@ -208,14 +311,26 @@ def process_door_folder(folder_path: str, api_key: str, model: str = "gpt-4o") -
     for i, image_path in enumerate(image_files, 1):
         print(f"[{i}/{len(image_files)}] Analyzing {os.path.basename(image_path)}...")
         
-        result = analyze_door_image(image_path, api_key, model)
-        results.append(result)
+        result = analyze_door_image(image_path, api_key, model, debug)
         
-        # Print result
-        if result["needs_review"]:
-            print(f"  ⚠️  NEEDS REVIEW: {result['reason']}")
+        # Handle both single results and arrays of results
+        if isinstance(result, list):
+            # Multiple doors found in single image
+            print(f"  Found {len(result)} doors in this image")
+            for j, door_result in enumerate(result, 1):
+                print(f"    Door {j}: ", end="")
+                if door_result["needs_review"]:
+                    print(f"⚠️  NEEDS REVIEW: {door_result['reason']}")
+                else:
+                    print(f"✓ Rating: {door_result['rating']} (confidence: {door_result['confidence']})")
+            results.extend(result)  # Add all doors to results
         else:
-            print(f"  ✓ Rating: {result['rating']} (confidence: {result['confidence']})")
+            # Single door result
+            if result["needs_review"]:
+                print(f"  ⚠️  NEEDS REVIEW: {result['reason']}")
+            else:
+                print(f"  ✓ Rating: {result['rating']} (confidence: {result['confidence']})")
+            results.append(result)
     
     print(f"\n{'='*60}")
     print(f"Completed analysis of {len(image_files)} images")
@@ -257,7 +372,11 @@ def aggregate_ratings(results: List[Dict]) -> Dict:
         # Count ratings
         if result["rating"] and not result["needs_review"]:
             rating = result["rating"]
-            rating_counts[rating] = rating_counts.get(rating, 0) + 1
+            # Handle "NO_RATING" as a special case
+            if rating == "NO_RATING":
+                rating_counts["NO_RATING"] = rating_counts.get("NO_RATING", 0) + 1
+            else:
+                rating_counts[rating] = rating_counts.get(rating, 0) + 1
         
         # Collect items needing review
         if result["needs_review"]:
