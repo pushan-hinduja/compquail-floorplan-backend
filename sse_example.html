@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fire Door Detection - SSE Progress Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .progress-container {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 20px;
+            margin: 20px 0;
+            display: none;
+        }
+        .progress-step {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+        .progress-step.active {
+            background-color: #007bff;
+            color: white;
+        }
+        .progress-step.completed {
+            background-color: #28a745;
+            color: white;
+        }
+        .progress-step.error {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .results {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 20px;
+            margin: 20px 0;
+            display: none;
+        }
+        .file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fire Door Detection - Real-Time Progress</h1>
+    
+    <div class="upload-area" id="uploadArea">
+        <p>Drag and drop a PDF or image file here, or click to select</p>
+        <input type="file" id="fileInput" class="file-input" accept=".pdf,.png,.jpg,.jpeg">
+        <button class="btn" onclick="document.getElementById('fileInput').click()">Select File</button>
+    </div>
+    
+    <div id="fileInfo" style="display: none;">
+        <h3>Selected File:</h3>
+        <p id="fileName"></p>
+        <p id="fileSize"></p>
+        <button class="btn" id="analyzeBtn" onclick="analyzeFile()">Analyze Floor Plan</button>
+    </div>
+
+    <div id="progressContainer" class="progress-container">
+        <h3>Analysis Progress</h3>
+        <div id="progressSteps">
+            <div class="progress-step" id="step1">Starting analysis...</div>
+            <div class="progress-step" id="step2">Detecting doors...</div>
+            <div class="progress-step" id="step3">Analyzing fire ratings...</div>
+            <div class="progress-step" id="step4">Processing complete</div>
+        </div>
+    </div>
+
+    <div id="results" class="results">
+        <h3>Analysis Results</h3>
+        <div id="resultsContent"></div>
+    </div>
+
+    <script src="fire-door-sdk.js"></script>
+    <script>
+        // Initialize SDK
+        const sdk = new FireDoorSDK('http://localhost:8000');
+        
+        let currentFile = null;
+
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const progressContainer = document.getElementById('progressContainer');
+        const results = document.getElementById('results');
+
+        // Drag and drop handlers
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            // Validate file
+            const validation = FireDoorHelpers.validateFile(file);
+            if (!validation.valid) {
+                alert('File validation failed: ' + validation.errors.join(', '));
+                return;
+            }
+
+            currentFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+            fileInfo.style.display = 'block';
+        }
+
+        function updateProgressStep(stepId, status, message) {
+            const step = document.getElementById(stepId);
+            step.textContent = message;
+            step.className = `progress-step ${status}`;
+        }
+
+        function showProgress() {
+            progressContainer.style.display = 'block';
+            results.style.display = 'none';
+            
+            // Reset all steps
+            document.querySelectorAll('.progress-step').forEach(step => {
+                step.className = 'progress-step';
+            });
+        }
+
+        function hideProgress() {
+            progressContainer.style.display = 'none';
+        }
+
+        function showResults(data) {
+            hideProgress();
+            results.style.display = 'block';
+            
+            const resultsContent = document.getElementById('resultsContent');
+            resultsContent.innerHTML = `
+                <div class="status success">
+                    <h4>Analysis Complete!</h4>
+                    <p>Total doors detected: ${data.door_count}</p>
+                </div>
+                <h4>Fire Rating Breakdown:</h4>
+                <ul>
+                    ${Object.entries(data.fire_ratings).map(([rating, count]) => 
+                        `<li>${rating === 'NO_RATING' ? 'No Fire Rating' : rating + '-minute rating'}: ${count}</li>`
+                    ).join('')}
+                </ul>
+                ${data.human_feedback ? `
+                    <h4>Human Review Summary:</h4>
+                    <ul>
+                        <li>Total reviewed: ${data.human_feedback.total_reviewed}</li>
+                        <li>Rated: ${data.human_feedback.rated}</li>
+                        <li>Skipped: ${data.human_feedback.skipped}</li>
+                        <li>No rating: ${data.human_feedback.no_rating_count}</li>
+                    </ul>
+                ` : ''}
+            `;
+        }
+
+        // Progress callback function
+        function onProgress(progressData) {
+            console.log('Progress:', progressData);
+            
+            switch(progressData.milestone) {
+                case 'analysis_started':
+                    updateProgressStep('step1', 'active', 'Starting analysis...');
+                    break;
+                case 'detecting_doors':
+                    updateProgressStep('step1', 'completed', 'Analysis started');
+                    updateProgressStep('step2', 'active', 'Detecting doors...');
+                    break;
+                case 'doors_detected':
+                    updateProgressStep('step2', 'completed', `Found ${progressData.data.door_count} doors`);
+                    updateProgressStep('step3', 'active', 'Analyzing fire ratings...');
+                    break;
+                case 'fire_ratings_analyzed':
+                    updateProgressStep('step3', 'completed', 'Fire rating analysis complete');
+                    updateProgressStep('step4', 'active', 'Processing complete...');
+                    break;
+                case 'human_review_needed':
+                    updateProgressStep('step4', 'active', 'Human review required');
+                    break;
+                case 'analysis_complete':
+                    updateProgressStep('step4', 'completed', 'Analysis complete!');
+                    // The results will be handled by the main response
+                    break;
+                case 'analysis_failed':
+                    updateProgressStep('step4', 'error', `Analysis failed: ${progressData.data.error}`);
+                    break;
+            }
+        }
+
+        async function analyzeFile() {
+            if (!currentFile) {
+                alert('Please select a file first');
+                return;
+            }
+
+            showProgress();
+            
+            try {
+                const result = await sdk.analyzeFloorPlan(currentFile, {
+                    confidence: 0.25,
+                    padding: 20,
+                    dpi: 600
+                }, onProgress);
+
+                if (result.success) {
+                    if (result.needsReview) {
+                        // Show human review interface (simplified for this example)
+                        alert('Human review required - this would show the review interface');
+                    } else {
+                        // Show results
+                        showResults(result.data);
+                    }
+                } else {
+                    updateProgressStep('step4', 'error', `Analysis failed: ${result.error}`);
+                }
+            } catch (error) {
+                updateProgressStep('step4', 'error', `Error: ${error.message}`);
+            }
+        }
+
+        // Check API health on page load
+        window.addEventListener('load', async () => {
+            const isHealthy = await sdk.checkHealth();
+            if (!isHealthy) {
+                alert('API is not responding. Please make sure the server is running.');
+            }
+        });
+    </script>
+</body>
+</html>

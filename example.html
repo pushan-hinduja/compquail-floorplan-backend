@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fire Door Detection - Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .upload-area.dragover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        .file-input {
+            display: none;
+        }
+        .btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .results {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .review-item {
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .review-item img {
+            max-width: 200px;
+            max-height: 200px;
+            border: 1px solid #ccc;
+            margin: 10px 0;
+        }
+        .rating-select {
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .loading {
+            display: none;
+        }
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fire Door Detection System</h1>
+    
+    <div id="upload-section">
+        <div class="upload-area" id="uploadArea">
+            <p>Drag and drop a PDF or image file here, or click to select</p>
+            <input type="file" id="fileInput" class="file-input" accept=".pdf,.png,.jpg,.jpeg">
+            <button class="btn" onclick="document.getElementById('fileInput').click()">Select File</button>
+        </div>
+        
+        <div id="fileInfo" style="display: none;">
+            <h3>Selected File:</h3>
+            <p id="fileName"></p>
+            <p id="fileSize"></p>
+            <button class="btn" id="analyzeBtn" onclick="analyzeFile()">Analyze Floor Plan</button>
+        </div>
+    </div>
+
+    <div id="loading" class="loading">
+        <div class="status info">
+            <h3>Processing...</h3>
+            <p>Please wait while we analyze your floor plan. This may take 1-3 minutes for large files.</p>
+        </div>
+    </div>
+
+    <div id="results" style="display: none;">
+        <h3>Analysis Results</h3>
+        <div id="resultsContent"></div>
+    </div>
+
+    <div id="review-section" style="display: none;">
+        <h3>Human Review Required</h3>
+        <p>Some doors need manual review. Please provide ratings for the following doors:</p>
+        <div id="reviewItems"></div>
+        <button class="btn" id="submitReviewBtn" onclick="submitReview()">Submit Reviews</button>
+    </div>
+
+    <script src="fire-door-sdk.js"></script>
+    <script>
+        // Initialize SDK
+        const sdk = new FireDoorSDK('http://localhost:8000');
+        
+        let currentFile = null;
+        let currentSession = null;
+        let reviewData = {};
+
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+
+        // Drag and drop handlers
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            // Validate file
+            const validation = FireDoorHelpers.validateFile(file);
+            if (!validation.valid) {
+                showStatus('error', 'File validation failed: ' + validation.errors.join(', '));
+                return;
+            }
+
+            currentFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+            fileInfo.style.display = 'block';
+        }
+
+        async function analyzeFile() {
+            if (!currentFile) {
+                showStatus('error', 'Please select a file first');
+                return;
+            }
+
+            showLoading(true);
+            hideStatus();
+
+            try {
+                const result = await sdk.analyzeFloorPlan(currentFile, {
+                    confidence: 0.25,
+                    padding: 20,
+                    dpi: 600,
+                    enhance: true
+                });
+
+                if (result.success) {
+                    if (result.needsReview) {
+                        // Show human review interface
+                        currentSession = result.sessionId;
+                        showReviewInterface(result.data.review_items);
+                    } else {
+                        // Show results directly
+                        showResults(result.data);
+                    }
+                } else {
+                    showStatus('error', result.error);
+                }
+            } catch (error) {
+                showStatus('error', 'Analysis failed: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showReviewInterface(reviewItems) {
+            const reviewSection = document.getElementById('review-section');
+            const reviewItemsDiv = document.getElementById('reviewItems');
+            
+            reviewItemsDiv.innerHTML = '';
+            reviewData = {};
+
+            reviewItems.forEach((item, index) => {
+                const reviewDiv = document.createElement('div');
+                reviewDiv.className = 'review-item';
+                reviewDiv.innerHTML = `
+                    <h4>Door ${index + 1}: ${item.image_name}</h4>
+                    <img src="data:image/png;base64,${item.image_data}" alt="Door image">
+                    <p>Current AI rating: ${item.current_rating || 'Unknown'}</p>
+                    <label>Your rating:</label>
+                    <select class="rating-select" id="rating_${index}" onchange="updateReview('${item.image_name}', this.value)">
+                        <option value="">Select rating...</option>
+                        <option value="30">30-minute rating</option>
+                        <option value="60">60-minute rating</option>
+                        <option value="90">90-minute rating</option>
+                        <option value="180">180-minute rating</option>
+                        <option value="NO_RATING">No fire rating</option>
+                        <option value="skip">Skip this door</option>
+                    </select>
+                `;
+                reviewItemsDiv.appendChild(reviewDiv);
+            });
+
+            reviewSection.style.display = 'block';
+        }
+
+        function updateReview(imageName, rating) {
+            if (rating) {
+                reviewData[imageName] = rating;
+            } else {
+                delete reviewData[imageName];
+            }
+        }
+
+        async function submitReview() {
+            if (!currentSession) {
+                showStatus('error', 'No active session');
+                return;
+            }
+
+            // Convert review data to API format
+            const reviews = Object.entries(reviewData).map(([imageName, rating]) => ({
+                image_name: imageName,
+                rating: rating
+            }));
+
+            if (reviews.length === 0) {
+                showStatus('error', 'Please provide at least one rating');
+                return;
+            }
+
+            showLoading(true);
+            hideStatus();
+
+            try {
+                const result = await sdk.submitReview(currentSession, reviews);
+                
+                if (result.success) {
+                    showResults(result.data);
+                    document.getElementById('review-section').style.display = 'none';
+                } else {
+                    showStatus('error', result.error);
+                }
+            } catch (error) {
+                showStatus('error', 'Review submission failed: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showResults(data) {
+            const resultsDiv = document.getElementById('results');
+            const resultsContent = document.getElementById('resultsContent');
+            
+            resultsContent.innerHTML = `
+                <div class="status success">
+                    <h4>Analysis Complete!</h4>
+                    <p>Total doors detected: ${data.door_count}</p>
+                </div>
+                <h4>Fire Rating Breakdown:</h4>
+                <ul>
+                    ${Object.entries(data.fire_ratings).map(([rating, count]) => 
+                        `<li>${rating === 'NO_RATING' ? 'No Fire Rating' : rating + '-minute rating'}: ${count}</li>`
+                    ).join('')}
+                </ul>
+                ${data.human_feedback ? `
+                    <h4>Human Review Summary:</h4>
+                    <ul>
+                        <li>Total reviewed: ${data.human_feedback.total_reviewed}</li>
+                        <li>Rated: ${data.human_feedback.rated}</li>
+                        <li>Skipped: ${data.human_feedback.skipped}</li>
+                        <li>No rating: ${data.human_feedback.no_rating_count}</li>
+                    </ul>
+                ` : ''}
+            `;
+            
+            resultsDiv.style.display = 'block';
+        }
+
+        function showLoading(show) {
+            const loading = document.getElementById('loading');
+            if (show) {
+                loading.classList.add('show');
+            } else {
+                loading.classList.remove('show');
+            }
+        }
+
+        function showStatus(type, message) {
+            hideStatus();
+            const status = document.createElement('div');
+            status.className = `status ${type}`;
+            status.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+            document.body.insertBefore(status, document.body.firstChild);
+        }
+
+        function hideStatus() {
+            const existingStatus = document.querySelector('.status');
+            if (existingStatus) {
+                existingStatus.remove();
+            }
+        }
+
+        // Check API health on page load
+        window.addEventListener('load', async () => {
+            const isHealthy = await sdk.checkHealth();
+            if (!isHealthy) {
+                showStatus('error', 'API is not responding. Please make sure the server is running.');
+            }
+        });
+    </script>
+</body>
+</html>

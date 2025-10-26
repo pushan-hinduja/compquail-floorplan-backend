@@ -444,6 +444,10 @@ def detect_and_save_doors(image_path, output_folder, model_path='models/door_det
     door_images = []  # List to track saved door image paths
     is_pdf = Path(image_path).suffix.lower() == '.pdf'
     
+    # Safety check - ensure door_images is always defined
+    if 'door_images' not in locals():
+        door_images = []
+    
     for page_num, image in images:
         page_prefix = f"page{page_num}_" if len(images) > 1 else ""
         print(f"\n{'='*50}")
@@ -471,21 +475,27 @@ def detect_and_save_doors(image_path, output_folder, model_path='models/door_det
                 print(f"Saved enhanced PDF page: {enhanced_filename}")
         
         # Choose processing method based on file type and size
-        if is_pdf and use_adaptive_grid:
-            # Use adaptive grid for large PDFs
-            print(f"🔧 Using adaptive grid processing for large PDF...")
-            page_door_count, page_door_images = process_image_with_adaptive_grid(
-                image, model, confidence, padding, min_size, output_folder, 
-                page_prefix, debug, page_num
-            )
-            door_images.extend(page_door_images)
-        else:
-            # Use standard processing for PNGs or when adaptive grid is disabled
-            page_door_count, page_door_images = process_image_standard(
-                image, model, confidence, padding, min_size, output_folder, 
-                page_prefix, debug, page_num
-            )
-            door_images.extend(page_door_images)
+        try:
+            if is_pdf and use_adaptive_grid:
+                # Use adaptive grid for large PDFs
+                print(f"🔧 Using adaptive grid processing for large PDF...")
+                page_door_count, page_door_images = process_image_with_adaptive_grid(
+                    image, model, confidence, padding, min_size, output_folder, 
+                    page_prefix, debug, page_num
+                )
+                door_images.extend(page_door_images)
+            else:
+                # Use standard processing for PNGs or when adaptive grid is disabled
+                page_door_count, page_door_images = process_image_standard(
+                    image, model, confidence, padding, min_size, output_folder, 
+                    page_prefix, debug, page_num
+                )
+                door_images.extend(page_door_images)
+        except Exception as e:
+            print(f"❌ Error processing page {page_num}: {e}")
+            print(f"   Continuing with next page...")
+            page_door_count = 0
+            page_door_images = []
         
         total_door_count += page_door_count
         print(f"Doors found on {'page ' + str(page_num) if len(images) > 1 else 'this image'}: {page_door_count}")
@@ -493,6 +503,10 @@ def detect_and_save_doors(image_path, output_folder, model_path='models/door_det
     print(f"\n{'='*50}")
     print(f"Total doors detected and saved: {total_door_count}")
     print(f"{'='*50}")
+    
+    # Final safety check
+    if 'door_images' not in locals():
+        door_images = []
     
     return {
         "door_count": total_door_count,
@@ -576,8 +590,6 @@ def process_image_standard(image, model, confidence, padding, min_size, output_f
                     cropped_image.save(output_path, quality=95, optimize=False)
                     
                     # Add the saved image path to our list
-                    door_images.append(output_path)
-                    
                     page_door_count += 1
                     page_door_images.append(output_path)
                     print(f"Saved door {page_door_count}: {filename} (confidence: {conf_score:.2f})")
